@@ -12,13 +12,23 @@ const pump = require('pump')
 const writer = require('flush-write-stream')
 const blessed = require('blessed')
 const contrib = require('blessed-contrib')
+const { monitorEventLoopDelay } = require('perf_hooks');
 
 function Monitor () {
   Readable.call(this)
-
+  this.m = monitorEventLoopDelay();
+  this.m.enable();
   var that = this
   this._timer = setInterval(() => {
-    that.push(JSON.stringify(process.memoryUsage()))
+    var data = {
+      titles: [],
+      data: []
+    };
+    this.m.percentiles.forEach((value,key) => {
+      data.titles.push(`${key.toFixed(2)}`);
+      data.data.push(value / 1e7);
+    });
+    that.push(JSON.stringify(data))
     that.push('\n')
   }, 500)
 }
@@ -31,6 +41,7 @@ Monitor.prototype._read = function () {
 
 Monitor.prototype.destroy = function () {
   if (this._timer) {
+    this.m.disable();
     clearInterval(this._timer)
     this._timer = null
     this.push(null)
@@ -84,31 +95,7 @@ function cli () {
   })
 
   let screen
-  let line
-  const rss = {
-    title: 'rss',
-    x: empty(80),
-    y: empty(80),
-    style: {
-      line: 'red'
-    }
-  }
-  const heapTotal = {
-    title: 'heapTotal',
-    x: empty(80),
-    y: empty(80),
-    style: {
-      line: 'yellow'
-    }
-  }
-  const heapUsed = {
-    title: 'heapUsed',
-    x: empty(80),
-    y: empty(80),
-    style: {
-      line: 'green'
-    }
-  }
+  let bar
 
   if (argv.help || !argv._[0]) {
     console.log('Usage: climem FILE')
@@ -119,16 +106,16 @@ function cli () {
 
   if (!argv.data) {
     screen = blessed.screen()
-    line = contrib.line({
-      width: 80,
+    bar = contrib.bar({
+      label: 'Event Loop Delay',
+      width: 120,
       height: 30,
-      xLabelPadding: 3,
-      xPadding: 5,
-      label: 'Memory (MB)',
-      showLegend: true,
-      legend: { width: 12 }
+      barWidth: 2,
+      barSpacing: 4,
+      xOffset: 0,
+      maxHeight: 100
     })
-    screen.append(line)
+    screen.append(bar)
 
     screen.key(['escape', 'q', 'C-c'], () => {
       return process.exit(0)
@@ -157,13 +144,7 @@ function cli () {
   }
 
   function plot (chunk, enc, cb) {
-    rss.y.shift()
-    rss.y.push(chunk.rss / 1024 / 1024)
-    heapTotal.y.shift()
-    heapTotal.y.push(chunk.heapTotal / 1024 / 1024)
-    heapUsed.y.shift()
-    heapUsed.y.push(chunk.heapUsed / 1024 / 1024)
-    line.setData([rss, heapTotal, heapUsed])
+    bar.setData(chunk);
     screen.render()
     cb()
   }
